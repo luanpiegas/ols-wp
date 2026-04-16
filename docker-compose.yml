@@ -1,28 +1,31 @@
-version: '3.8'
+name: ${STACK_NAME:-pcs}
 
 services:
   litespeed:
     image: litespeedtech/openlitespeed:latest
-    container_name: litespeed
     ports:
-      - "${HTTP_PORT}:80"
-      - "${HTTPS_PORT}:443"
-      - "${OLS_ADMIN_PORT}:7080"
+      - "${OLS_ADMIN_PORT:-7080}:7080"
     volumes:
       - ./wordpress:/var/www/vhosts/localhost/html # WordPress
       - ./litespeed/conf:/usr/local/lsws/conf # OLS
       - ./php/php.ini:/usr/local/lsws/lsphp74/etc/php/php.ini # PHP
     environment:
       - TZ=${TZ}
+      - VIRTUAL_HOST=${DOMAIN}
+      - VIRTUAL_PORT=80
     depends_on:
-      - database
-      - redis
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      wpcli:
+        condition: service_healthy
     networks:
       - network
+      - proxy
 
   database:
-    image: mariadb:10.6
-    container_name: database
+    image: mariadb
     command: --default-authentication-plugin=mysql_native_password
     volumes:
       - database_data:/var/lib/mysql
@@ -31,55 +34,79 @@ services:
       MYSQL_DATABASE: '${DB_NAME}'
       MYSQL_USER: '${DB_USER}'
       MYSQL_PASSWORD: '${DB_PASSWORD}'
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
     networks:
       - network
 
   adminer:
     image: adminer
-    container_name: adminer
     restart: unless-stopped
-    ports:
-      - "${ADMINER_PORT}:8080"
+    environment:
+      - VIRTUAL_HOST=db.${DOMAIN}
+      - VIRTUAL_PORT=8080
     depends_on:
-      - database
+      database:
+        condition: service_healthy
     networks:
       - network
+      - proxy
 
   redis:
     image: redis:alpine
-    container_name: redis
     restart: unless-stopped
     networks:
       - network
 
   wpcli:
-    image: wordpress:cli
-    container_name: wpcli
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pcs-wpcli
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - ./wordpress:/var/www/html
       - ./php/php.ini:/usr/local/etc/php/conf.d/custom-memory.ini
+    working_dir: /var/www/html
     depends_on:
-      - database
-      - redis
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_started
     environment:
+      - HOME=/tmp
+      - DOMAIN=${DOMAIN}
       - WORDPRESS_DB_HOST=database
       - WORDPRESS_DB_USER=${DB_USER}
       - WORDPRESS_DB_PASSWORD=${DB_PASSWORD}
       - WORDPRESS_DB_NAME=${DB_NAME}
-      
-      - WP_HOME=${WP_HOME}
+      - WP_HOME=${WP_HOME:-}
+      - WP_SITE_TITLE=${WP_SITE_TITLE:-WordPress}
       - WP_ADMIN_USER=${WP_ADMIN_USER}
       - WP_ADMIN_PASSWORD=${WP_ADMIN_PASSWORD}
       - WP_ADMIN_EMAIL=${WP_ADMIN_EMAIL}
-      - WP_CACHE_KEY_SALT=${WP_CACHE_KEY_SALT}
+      - WP_CACHE_KEY_SALT=${WP_CACHE_KEY_SALT:-}
       - PHP_INI_MEMORY_LIMIT=256M
+    healthcheck:
+      test: ["CMD-SHELL", "wp core is-installed --path=/var/www/html --allow-root >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     networks:
       - network
 
 networks:
   network:
     driver: bridge
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-local-proxy}
 
 volumes:
   database_data:
