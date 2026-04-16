@@ -1,4 +1,4 @@
-name: ${STACK_NAME:-pcs}
+name: ${STACK_NAME:-ols}
 
 services:
   litespeed:
@@ -67,7 +67,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: pcs-wpcli
+    image: ols-wpcli
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - ./wordpress:/var/www/html
